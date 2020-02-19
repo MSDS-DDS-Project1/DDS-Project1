@@ -1,0 +1,324 @@
+---
+title: "DDS_Project 1"
+author: "Paul-VJ"
+date: "2/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+``` {r Load Files & Libraries}
+
+library(jsonlite)
+library(RCurl)
+library(class)
+library(httr)
+library(caret)
+library(e1071)
+library(ggplot2)
+library(magrittr)
+library(plyr)
+library(dplyr)
+library(tm)
+library(tidyr)
+library(tidyverse)
+library(maps)
+library(mapproj)
+library(stringr)
+
+# Load datasets in -----------------------------------------------------------
+Beers <- read.csv("Beers.csv",header=TRUE, strip.white = TRUE)
+Beers <- as.data.frame(Beers)
+Breweries <- read.csv("Breweries.csv",header=TRUE, strip.white = TRUE)
+Breweries <- as.data.frame(Breweries)
+
+
+```
+
+``` {r How many breweries are present in each state?}
+
+# SIMPLE BARPLOT --------------------------------------------------------------
+ggplot(data=Breweries) +
+  geom_bar(aes(x=forcats::fct_infreq(State))) +
+  ggtitle("Number of Breweries per State") +
+  ylab("Number of Breweries") +
+  xlab("State") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90))
+
+# HEATMAP -------------------------------------------------------------------
+lookup = data.frame(abb = state.abb, State = state.name)
+colnames(Breweries)[4] = "abb"
+Breweries$abb=trimws(Breweries$abb)
+Breweries2 = merge(Breweries,lookup,"abb") # make one dataset with state names and abb
+BreweriesMapData = count(Breweries2,State) #count up the occurance of each state.
+colnames(BreweriesMapData)[2] = "BreweryCount" #change "n" to "BreweryCount"
+BreweriesMapData$region <- tolower(BreweriesMapData$State)
+BreweriesMapData2 = BreweriesMapData[-1]
+states <- map_data("state")
+map.df <- merge(states,BreweriesMapData2, by="region", all.x=T)
+map.df <- map.df[order(map.df$order),]
+ggplot(map.df, aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=BreweryCount))+
+  geom_path()+
+  scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90")+ggtitle("Brewery Count by State") + ylab("Latitude") + xlab("Longitude") +
+  coord_map() + theme_bw()
+
+
+
+```
+
+``` {r Merge Datasets}
+# Change column names and merge data ------------------------------------------
+colnames(Beers)[5] <- "Brew_ID"
+
+MergeData <- merge(Breweries, Beers, by = "Brew_ID", all = TRUE)
+colnames(MergeData)[2] <- "Brewery"
+colnames(MergeData)[5] <- "Beer Name"
+
+# View first 6 rows and last 6 rows --------------------------------------------
+head(MergeData,6)
+tail(MergeData,6)
+
+
+```
+
+``` {r Address Missing Values}
+# Count number of NA's in the dataset ------------------------------------------
+na_count <- sapply(MergeData, function(y) sum(length(which(is.na(y)))))
+na_count <- data.frame(na_count)
+
+# Original Merged Data Copy (Original Copy - do not change) --------------------
+MergeData
+
+# Replacing the NA's? ---------------------------------------------------------
+# We toyed with the idea of replacing the NA's with the mean of the respective column.
+# After running models, changing the NA's to the mean had a significant inpact on the data.
+# Therefore, we decided to keep the NA's for now.
+
+# The code below is replacing the NA's with the mean. It was not used in this study.
+MergeDataReplNA <- MergeData
+MergeDataReplNA$ABV.imp.mean <- ifelse(is.na(MergeData$ABV), mean(MergeData$ABV, na.rm=TRUE), MergeData$ABV)
+MergeDataReplNA$IBU.imp.mean <- ifelse(is.na(MergeData$IBU), mean(MergeData$IBU, na.rm=TRUE), MergeData$IBU)
+
+```
+
+``` {r Median ABV & IBU by State}
+# Original Merged Data ---------------------------------------------------------
+MergeMedians <- MergeData
+
+# Calculate Median and Graph --------------------------------------------------
+ABVMergeMedians <- aggregate(ABV ~ State, MergeMedians, median)
+IBUMergeMedians <- aggregate(IBU ~ State, MergeMedians, median)
+MergeMediansOrg <- merge(ABVMergeMedians, IBUMergeMedians, "State")
+
+ggplot(MergeMediansOrg, aes(MergeMediansOrg$State, MergeMediansOrg$ABV)) + 
+  geom_bar(stat="identity") + theme_bw() + theme(axis.text.x = element_text(angle = 90))
+
+ggplot(MergeMediansOrg, aes(MergeMediansOrg$State, MergeMediansOrg$IBU)) + 
+  geom_bar(stat="identity") + theme_bw() + theme(axis.text.x = element_text(angle = 90))
+
+
+```
+
+``` {r Which state has the maximum ABV & IBU}
+# Calculating the maximum by State --------------------------------------------
+MaxABVState <- aggregate(ABV ~ State, MergeData, max)
+MaxABVState <- MaxABVState[order(-MaxABVState$ABV),]
+
+MaxIBUState <- aggregate(IBU ~ State, MergeData, max)
+MaxIBUState <- MaxIBUState[order(-MaxIBUState$IBU),]
+
+```
+
+``` {r Summary Stats and Distribution of ABV}
+# Statistics and Distributions -------------------------------------------------
+summary(MergeData$ABV)
+
+ggplot(MergeData, aes(x=MergeData$ABV)) + geom_histogram() + theme_bw()
+ggplot(MergeData, aes(x=MergeData$ABV)) + geom_density(aes(fill="blue4")) + theme_bw()
+
+ABV_Top5 <- MergeData %>% filter(State == "CO" | State == "KY" | State == "IN" | State == "NY" | State == "CA")
+
+ggplot(ABV_Top5, aes(x=ABV_Top5$ABV)) + geom_histogram(aes(fill=ABV_Top5$State)) + 
+  facet_wrap(~ABV_Top5$State) + theme_bw()
+
+ggplot(mapping = aes(x = ABV_Top5$ABV)) + geom_density(aes(fill=ABV_Top5$State, alpha=0.5)) + theme_bw()
+
+
+```
+
+``` {r Relationship betweeen IBU & ABV}
+# Scatter plot to evaluate the relationship ------------------------------------
+ggplot(MergeData, aes(x=MergeData$ABV, y=MergeData$IBU)) + 
+  geom_point(position = "jitter") + ylab("IBU") + xlab("ABV") + ggtitle("Relationship Between ABV & IBU") + theme_bw()
+
+
+```
+
+``` {r KNN IBU & ABV}
+# Create DataSet & Omit NA's -----------------------------------------------
+KNNData <- MergeData
+KNNData<-na.omit(KNNData)
+
+# Filter and Replace IPA & Ale ---------------------------------------------
+KNNData$Style <- as.character(KNNData$Style)
+KNNData <- filter(KNNData,grepl('IPA|Ale',Style))
+
+KNNDataS <- select(KNNData,ABV,IBU,Style)
+KNNDataS$Style <- as.character(KNNDataS$Style)
+
+for (i in 1:944) {
+  if (is.na(str_match(KNNDataS[i,3],".Ale"))) {
+    KNNDataS[i,3] <- "IPA"
+  } else {
+    KNNDataS[i,3] <- "ALE" 
+    
+  }
+} 
+
+
+set.seed(6)
+ALESplit = .70
+IPASample <- sample(1:dim(KNNDataS)[1],round(ALESplit * dim(KNNDataS)[1]))
+
+trainIpa <- KNNDataS[IPASample,]
+testIpa <- KNNDataS[-IPASample,]
+
+# Find Best Value of K for KNN test ----------------------------------------
+trainIpa$Style <- as.factor(trainIpa$Style)
+testIpa$Style <- as.factor(testIpa$Style)
+
+accu = data.frame(accuracy = numeric(100), k = numeric(100))
+for (i in 1:100) {
+  classify = knn(trainIpa[,c(1,2)],testIpa[,c(1,2)],trainIpa$Style, prob = TRUE, k = i)
+  table(classify,testIpa$Style)
+  confused <- confusionMatrix(table(classify,testIpa$Style))
+  accu$accuracy[i] = confused$overall[1]
+  accu$k[i] = i
+}
+
+ggplot(accu,aes(x=k,y=accuracy)) +
+  geom_line() +
+  labs(x="Tally",y="Accuracy")
+
+
+# KNN Test -----------------------------------------------------------------
+KNNIPA <- knn(trainIpa[,1:2],testIpa[,1:2],cl=trainIpa$Style,k=30,prob = TRUE)
+CM <- confusionMatrix(table(KNNIPA,testIpa$Style))
+CM
+
+# NB Test -------------------------------------------------------------------
+KNNDataS$Style <- as.factor(KNNDataS$Style)
+testIpa$Style <- as.factor(testIpa$Style)
+trainIpa$Style <- as.factor(trainIpa$Style)
+Model <- naiveBayes(Style ~., data = trainIpa)
+Model
+df <- data.frame(Style = "IPA",ABV = testIpa$ABV, IBU = testIpa$IBU)
+Prediction <- predict(Model,df)
+table <- table(Prediction,testIpa$Style)
+CM2 <- confusionMatrix(table)
+CM2
+
+
+
+```
+
+``` {r Knock your socks off!!}
+
+# Comparing ABV and Drink Size(ounces) by state
+theme_set(theme_bw())  
+g <- ggplot(MergeData, aes(abb, ABV ,color=Ounces))
+market <- g + geom_count(show.legend=F) +
+  labs(subtitle="Correlate high ABV and large containers for marketing", 
+       y="ABV", 
+       x="State", 
+       title="Large container consumption by State")
+market
+
+
+# Which Beer names are most common?
+Name <- Corpus(VectorSource(MergeData$`Beer Name`))
+Name2 <- tm_map(Name, content_transformer(tolower))
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+Name3 <- tm_map(Name2,content_transformer(removeURL))
+removeNumPunct <- function(x) gsub("[^[:alpha:][:space:]]*", "", x)
+Name4 <- tm_map(Name3,content_transformer(removeNumPunct))
+myStopWords <- c(setdiff(stopwords("English"),c("Ale","IPA", "Pale")))
+Name5 <- tm_map(Name4, removeWords, myStopWords)
+Name6 <- tm_map(Name5, stripWhitespace)
+
+NameUse <- Name6
+
+tdm <- TermDocumentMatrix(NameUse,
+                          control = list(wordLengths = c(2,Inf)))
+
+freqterms <- findFreqTerms(tdm,lowfreq = 1)
+
+term.freq <- rowSums(as.matrix(tdm))
+term.freq <- subset(term.freq,term.freq >= 15)
+df <- data.frame(term = names(term.freq), freq = as.numeric(term.freq))
+df %>%
+  filter(df$term != "ipa", df$term != "ale", df$term != "pale") %>%
+  ggplot(aes(x=term, y=freq)) +
+  geom_bar(stat="identity") +
+  xlab("Term")+
+  ylab("Count")+
+  ggtitle("Most Popular Words in Beer Names (Excl. Words - IPA, Ale & Pale)") +
+  coord_flip()+
+  theme_bw()
+
+# most popular beer name in each state
+theme_set(theme_bw())  
+g <- ggplot(MergeData, aes(abb, MergeData$`Beer Name`))
+market <- g + geom_count(show.legend=F) +
+  labs(subtitle="Correlate high ABV and large containers for marketing", 
+       y="ABV", 
+       x="State", 
+       title="Large container consumption by State")
+market
+
+# Heatmap of Average ABV by State
+lookup = data.frame(abb = state.abb, State = state.name)
+colnames(MergeData)[4] = "abb"
+MergeData$abb=trimws(MergeData$abb)
+Breweries2 = merge(MergeData,lookup,"abb") # make one dataset with state names and abb
+BreweriesMapData = aggregate(ABV ~ State, Breweries2, mean)
+colnames(BreweriesMapData)[2] = "Average_ABV" #change "n" to "Average ABV"
+BreweriesMapData$region <- tolower(BreweriesMapData$State)
+BreweriesMapData2 = BreweriesMapData[-1]
+states <- map_data("state")
+map.df <- merge(states,BreweriesMapData2, by="region", all.x=T)
+map.df <- map.df[order(map.df$order),]
+ggplot(map.df, aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=Average_ABV))+
+  geom_path()+
+  scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90")+ggtitle("Average ABV per State") + ylab("Latitude") + xlab("Longitude") +
+  coord_map() + theme_bw()
+
+# Heatmap of Average Bottle Size by State
+lookup = data.frame(abb = state.abb, State = state.name)
+colnames(MergeData)[4] = "abb"
+MergeData$abb=trimws(MergeData$abb)
+Breweries2 = merge(MergeData,lookup,"abb") # make one dataset with state names and abb
+BreweriesMapData = aggregate(Ounces ~ State, Breweries2, mean)
+colnames(BreweriesMapData)[2] = "Average_Size" #change "n" to "Average Size"
+BreweriesMapData$region <- tolower(BreweriesMapData$State)
+BreweriesMapData2 = BreweriesMapData[-1]
+states <- map_data("state")
+map.df <- merge(states,BreweriesMapData2, by="region", all.x=T)
+map.df <- map.df[order(map.df$order),]
+ggplot(map.df, aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=Average_Size))+
+  geom_path()+
+  scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90")+ggtitle("Average Bottle Size (Oz) by State") + ylab("Latitude") + xlab("Longitude") +
+  coord_map() + theme_bw()
+```
